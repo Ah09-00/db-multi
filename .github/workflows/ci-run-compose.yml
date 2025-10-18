@@ -1,0 +1,63 @@
+name: CI - Run docker-compose and smoke tests
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ main ]
+
+jobs:
+  compose-up:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Install docker compose plugin
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker-compose-plugin
+
+      - name: Start docker-compose services
+        env:
+          COMPOSE_HTTP_TIMEOUT: 200
+        run: |
+          docker compose up -d
+          sleep 10
+
+      - name: Wait for MySQL
+        run: |
+          for i in {1..20}; do
+            docker exec mysql_lab mysql -ushopuser -pshoppass -e "SELECT 1;" && break
+            echo "waiting for mysql..."
+            sleep 3
+          done
+
+      - name: Wait for Postgres
+        run: |
+          for i in {1..20}; do
+            docker exec postgres_lab pg_isready -U appuser && break
+            echo "waiting for postgres..."
+            sleep 3
+          done
+
+      - name: Run smoke tests
+        run: |
+          echo "MySQL products count:"
+          docker exec mysql_lab mysql -ushopuser -pshoppass shop -e "SELECT COUNT(*) FROM products;"
+          echo "Postgres products count:"
+          docker exec postgres_lab psql -U appuser -d appdb -c "SELECT COUNT(*) FROM products;"
+
+      - name: Collect logs
+        run: |
+          echo "=== mysql logs ==="
+          docker logs mysql_lab || true
+          echo "=== postgres logs ==="
+          docker logs postgres_lab || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose down --volumes --remove-orphans
